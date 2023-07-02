@@ -1,0 +1,29 @@
+on: [push]
+name: Linux-container
+
+jobs:
+    build-and-deploy:
+        runs-on: ubuntu-latest
+        steps:
+        - name: 'Checkout GitHub Action'
+          uses: actions/checkout@main
+          
+        - name: 'Login via Azure CLI'
+          uses: Azure/login@v1
+          with:
+            creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
+        - uses: kzrnm/get-net-sdk-project-versions-action@v1
+          id: get-version
+          with:
+            proj-path: src/CraigRec2Telegram.csproj
+
+        - name: 'Docker login'
+          uses: azure/docker-login@v1
+          with:
+            login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+            username: ${{ secrets.REGISTRY_USERNAME }}
+            password: ${{ secrets.REGISTRY_PASSWORD }}
+        - run: |
+            dotnet publish -c Release ./src/CraigRec2Telegram.csproj
+            docker tag craigrec2telegram:${{ steps.get-version.outputs.version }} ${{ secrets.REGISTRY_LOGIN_SERVER }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
+            docker push ${{ secrets.REGISTRY_LOGIN_SERVER }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
