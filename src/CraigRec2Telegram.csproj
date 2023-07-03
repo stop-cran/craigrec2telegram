@@ -8,9 +8,16 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>ghcr.io/stop-cran/selenium/standalone-edge:114.0</ContainerBaseImage>
     <BaseImageTag>latest</BaseImageTag>
-    <Version>0.1.5</Version>
+    <Version>0.2.6</Version>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="ConfigureAwait.Fody" Version="3.3.2">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Fody" Version="6.8.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Google.Apis.Drive.v3" Version="1.61.0.3082" />
     <PackageReference Include="Microsoft.NET.Build.Containers" Version="7.0.305" />
     <PackageReference Include="Selenium.Chrome.WebDriver" Version="85.0.0" />
