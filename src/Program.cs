@@ -1,9 +1,10 @@
-﻿using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+﻿using Google.Apis.Auth.OAuth2;
+using Google.Apis.Drive.v3;
+using Google.Apis.Services;
+using Google.Apis.Upload;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Hosting;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Edge;
-using OpenQA.Selenium.Interactions;
 using OpenQA.Selenium.Support.UI;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
@@ -13,48 +14,29 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
-static class Program
+static partial class Program
 {
-    class CurrentlyProcessingUpdateCheck : IHealthCheck
-    {
-        public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
-        {
-            if (CurrentlyProcessingUpdate)
-                return Task.FromResult(HealthCheckResult.Unhealthy("Currently processing update"));
-
-            return Task.FromResult(HealthCheckResult.Healthy("Not processing update"));
-        }
-    }
-
     static async Task Main()
     {
         var cancel = new CancellationTokenSource();
 
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            cancel?.Cancel();
-        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => cancel?.Cancel();
 
         var builder = WebApplication.CreateBuilder();
 
-        var listenUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
-
-        if (listenUrls != null)
-            builder.WebHost.UseUrls(listenUrls);
-
+        builder.WebHost.UseUrls("http://+:5000");
         builder.Services.AddHealthChecks()
-            .AddCheck<CurrentlyProcessingUpdateCheck>("Startup", tags: new[] { "ready" });
+            .AddCheck("CurrentlyProcessing", () => CurrentlyProcessingUpdate
+                ? HealthCheckResult.Unhealthy("Currently processing update")
+                : HealthCheckResult.Healthy("Not processing update"));
 
         var app = builder.Build();
 
-        app.MapHealthChecks("/healthz/ready", new HealthCheckOptions
-        {
-            Predicate = healthCheck => healthCheck.Tags.Contains("ready")
-        });
+        app.MapHealthChecks("/healthz/ready");
 
         var run = app.RunAsync(cancel.Token);
 
-        var bot = new TelegramBotClient(Environment.GetEnvironmentVariable("bot-api-token")!);
+        var bot = new TelegramBotClient(Environment.GetEnvironmentVariable("TELEGRAM_BOT_API_TOKEN")!);
 
         await bot.ReceiveAsync(OnUpdate, OnPollingError, new ReceiverOptions
         {
@@ -69,22 +51,54 @@ static class Program
 
     static async Task OnUpdate(ITelegramBotClient client, Update update, CancellationToken cancel)
     {
-        if (update.Type == UpdateType.Message && update.Message?.Type == MessageType.Text && update.Message.Text != null)
+        if (update.Message?.Text == null)
         {
-            var text = update.Message.Text;
-            var m = Regex.Match(text, @"https://(?<prefix>giarc\.)?craig\.horse/rec/(?<id>[a-zA-Z0-9_]+)\?key=(?<key>[a-zA-Z0-9_]+)");
+            return;
+        }
+
+        var chat = await client.GetChatAsync(update.Message.Chat.Id);
+        string? driveFolderId = null;
+
+        if (chat.PinnedMessage?.Text == null)
+        {
+            if (DriveLinkRegex().IsMatch(update.Message.Text))
+            {
+                await client.PinChatMessageAsync(chat.Id, update.Message.MessageId, cancellationToken: cancel);
+                await client.SendTextMessageAsync(chat.Id, "Теперь присылай ссылку на запись в формате https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
+                return;
+            }
+        }
+        else
+        {
+            var m = DriveLinkRegex().Match(chat.PinnedMessage.Text);
 
             if (m.Success)
             {
-                await ProcessRecord(client, update.Message.Chat.Id, m.Groups["prefix"].Success, m.Groups["id"].Value, m.Groups["key"].Value, cancel);
+                driveFolderId = m.Groups["id"].Value;
+            }
+        }
+
+        if (driveFolderId == null)
+        {
+            await client.SendTextMessageAsync(chat.Id, "Пришли ссылку на папку в Google Drive (должно быть https://drive.google.com/drive/folders/...).", cancellationToken: cancel);
+            return;
+        }
+
+
+        if (update.Type == UpdateType.Message && update.Message?.Type == MessageType.Text && update.Message.Text != null)
+        {
+            var text = update.Message.Text;
+
+            var m = CraigRecordRegex().Match(text);
+
+            if (m.Success)
+            {
+                await ProcessRecord(client, chat.Id, m.Groups["prefix"].Success, m.Groups["id"].Value, m.Groups["key"].Value, driveFolderId, cancel);
                 return;
             }
         }
 
-        if (update.Message != null)
-        {
-            await client.SendTextMessageAsync(update.Message.Chat.Id, "Присылай ссылку на запись в формате https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
-        }
+        await client.SendTextMessageAsync(chat.Id, "Присылай ссылку на запись в формате https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
     }
 
     static Task OnPollingError(ITelegramBotClient client, Exception exception, CancellationToken cancel)
@@ -94,11 +108,16 @@ static class Program
         return Task.CompletedTask;
     }
 
-    private static async Task ProcessRecord(ITelegramBotClient client, long chatId, bool giarc, string recordId, string recordKey, CancellationToken cancel)
+    private static async Task ProcessRecord(ITelegramBotClient client, long chatId, bool giarc, string recordId, string recordKey, string driveFolderId, CancellationToken cancel)
     {
+        string downloadFolder = $"/tmp/record-{recordId}-{Guid.NewGuid()}";
+
+        Directory.CreateDirectory(downloadFolder);
+
         try
         {
             CurrentlyProcessingUpdate = true;
+            Console.WriteLine($"Processing record {recordId}...");
 
             var statusMessage = await client.SendTextMessageAsync(chatId, "Открываю браузер...", cancellationToken: cancel);
 
@@ -108,14 +127,12 @@ static class Program
                     try
                     {
                         await client.EditMessageTextAsync(chatId, statusMessage.MessageId, statusText, cancellationToken: cancel);
+
+                        Console.WriteLine($"Record id: {recordId}, status:{SnipUserName().Replace(statusText, "***").Replace("\n", "\t")}");
                     }
                     catch (ApiRequestException ex) when (ex.Message.ToLowerInvariant().Contains("message is not modified"))
                     { }
             }
-
-            string downloadFolder = "/tmp/download-" + Guid.NewGuid();
-
-            Directory.CreateDirectory(downloadFolder);
 
             var options = new EdgeOptions();
             options.AddUserProfilePreference("profile.default_content_setting_values.notifications", 1);
@@ -146,8 +163,11 @@ static class Program
 
             await resp;
 
+            var findElementCancelTimeout = new CancellationTokenSource(30_000);
+            var findElementCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel, findElementCancelTimeout.Token);
+
             await SetStatusText("Жду обработки (1)...");
-            var notFoundOrMpeg4Button = driver.FindElementAsync(By.XPath("//*[(name() = 'button' and .//span[text()='AAC'] and .//span[.//span[text()='(MPEG-4)']]and .//parent::div[.//preceding-sibling::div[.//h4[text() = 'Single-track mixed']]]) or (name() = 'span' and text() = 'Recording not found.')]"), cancel);
+            var notFoundOrMpeg4Button = await driver.FindElementAsync(By.XPath("//*[(name() = 'button' and .//span[text()='AAC'] and .//span[.//span[text()='(MPEG-4)']]and .//parent::div[.//preceding-sibling::div[.//h4[text() = 'Single-track mixed']]]) or (name() = 'span' and text() = 'Recording not found.')]"), findElementCancel.Token);
 
             if (notFoundOrMpeg4Button.TagName == "button")
             {
@@ -160,7 +180,7 @@ static class Program
             }
 
             await SetStatusText("Жду обработки (2)...");
-            driver.FindElementAsync(By.XPath("//button[text()='I understand.']"), cancel).Click();
+            (await driver.FindElementAsync(By.XPath("//button[text()='I understand.']"), findElementCancel.Token)).Click();
 
             var downloadedFileNames = Observable.FromEventPattern<OpenQA.Selenium.DevTools.V114.Page.DownloadWillBeginEventArgs>(
                 d => devToolsSession.Page.DownloadWillBegin += d,
@@ -178,9 +198,9 @@ static class Program
             for (int i = 0; i < 2; i++)
             {
                 await SetStatusText($"Жду обработки ({3 + i * 2})...");
-                driver.FindElementAsync(By.XPath("//button[contains(@class, 'row') and text()='OK' and .//parent::div[@class = 'dialog' and .//div[contains(text(), 'To handle large projects')]]]"), cancel).Click();
+                (await driver.FindElementAsync(By.XPath("//button[contains(@class, 'row') and text()='OK' and .//parent::div[@class = 'dialog' and .//div[contains(text(), 'To handle large projects')]]]"), findElementCancel.Token)).Click();
                 await SetStatusText($"Жду обработки ({4 + i * 2})...");
-                driver.FindElementAsync(By.XPath("//button[contains(@class, 'row') and text()='OK' and .//parent::div[@class = 'dialog' and .//div[text() = 'Failed to acquire permission for persistent storage. Large projects will fail.']]]"), cancel).Click();
+                (await driver.FindElementAsync(By.XPath("//button[contains(@class, 'row') and text()='OK' and .//parent::div[@class = 'dialog' and .//div[text() = 'Failed to acquire permission for persistent storage. Large projects will fail.']]]"), findElementCancel.Token)).Click();
             }
 
             for (bool finished = false; !finished;)
@@ -204,33 +224,90 @@ static class Program
 
             var downloadedFileName = await downloadedFileNames;
 
-            await client.DeleteMessageAsync(chatId, statusMessage.MessageId, cancellationToken: cancel);
-            await client.SendChatActionAsync(chatId, ChatAction.UploadVoice, cancellationToken: cancel);
+            await SetStatusText("Загружаю на Google Drive...");
 
-            using (var file = new FileStream(Path.Combine(downloadFolder, downloadedFileName), FileMode.Open, FileAccess.Read))
+            var credential = new ServiceAccountCredential(
+                 new ServiceAccountCredential.Initializer(Environment.GetEnvironmentVariable("GOOGLE_DRIVE_EMAIL"))
+                 {
+                     Scopes = new[] { DriveService.Scope.Drive }
+                 }.FromPrivateKey(Environment.GetEnvironmentVariable("GOOGLE_DRIVE_PRIVATE_KEY")));
+
+            using var service = new DriveService(new BaseClientService.Initializer
             {
-                await client.SendAudioAsync(chatId, InputFile.FromStream(file, recordId), cancellationToken: cancel);
+                HttpClientInitializer = credential
+            });
+
+            string googleDriveFileId;
+
+            using (var audioStream = new FileStream(Path.Combine(downloadFolder, downloadedFileName), FileMode.Open, FileAccess.Read))
+            {
+                var request = service.Files.Create(new Google.Apis.Drive.v3.Data.File
+                {
+                    Name = $"{recordId}-{DateTime.Now:yyyy:MM:ddTHH:mm:ss}{Path.GetExtension(downloadedFileName)}",
+                    Parents = new List<string> { driveFolderId }
+                }, audioStream, "audio/mpeg");
+                request.SupportsAllDrives = true;
+                request.SupportsTeamDrives = true;
+                request.Fields = "id";
+                var uploadProgress = await request.UploadAsync(cancel);
+
+                switch (uploadProgress.Status)
+                {
+                    case UploadStatus.Failed:
+                        Console.WriteLine("Upload failed!");
+                        Console.WriteLine(uploadProgress.Exception);
+                        await client.SendTextMessageAsync(chatId, "Ошибка загрузки!", cancellationToken: cancel);
+                        return;
+                    case UploadStatus.Completed:
+                        Console.WriteLine("Upload succeeded!");
+                        break;
+                    default:
+                        Console.WriteLine("Upload failed! Unexpected status: " + uploadProgress.Status);
+                        await client.SendTextMessageAsync(chatId, "Ошибка загрузки!", cancellationToken: cancel);
+                        return;
+                }
+
+                googleDriveFileId = request.ResponseBody.Id;
             }
 
-            foreach (var file in Directory.GetFiles(downloadFolder))
-                System.IO.File.Delete(file);
-            Directory.Delete(downloadFolder);
+            await client.DeleteMessageAsync(chatId, statusMessage.MessageId, cancellationToken: cancel);
+            await client.SendChatActionAsync(chatId, ChatAction.UploadDocument, cancellationToken: cancel);
+            await client.SendTextMessageAsync(chatId, $"Ссылка на запись: https://drive.google.com/file/d/{googleDriveFileId}/view?usp=drive_link", cancellationToken: cancel);
+
+            Console.WriteLine($"Successfully processed record {recordId}.");
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"Error processing record {recordId}...");
             Console.WriteLine(ex);
             await client.SendTextMessageAsync(chatId, "Ошибка!", cancellationToken: cancel);
         }
         finally
         {
+            Directory.Delete(downloadFolder, true);
             CurrentlyProcessingUpdate = false;
         }
     }
 
-    private static IWebElement FindElementAsync(this IWebDriver driver, By by, CancellationToken cancellationToken = default)
+    private static async Task<IWebElement> FindElementAsync(this IWebDriver driver, By by, CancellationToken cancellationToken)
     {
-        var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
+        for (; ; )
+        {
+            var elements = driver.FindElements(by);
 
-        return wait.Until(d => d.FindElement(by));
+            if (elements.Count > 0)
+                return elements[0];
+
+            await Task.Delay(1000, cancellationToken);
+        }
     }
+
+    [GeneratedRegex("^https://drive\\.google\\.com/drive/folders/(?<id>[a-zA-Z0-9_-]+)(\\?.*)?$")]
+    private static partial Regex DriveLinkRegex();
+
+    [GeneratedRegex("https://(?<prefix>giarc\\.)?craig\\.horse/rec/(?<id>[a-zA-Z0-9_]+)\\?key=(?<key>[a-zA-Z0-9_]+)")]
+    private static partial Regex CraigRecordRegex();
+
+    [GeneratedRegex("^[0-9]+-(?<name>[^:]+)", RegexOptions.Multiline)]
+    private static partial Regex SnipUserName();
 }
