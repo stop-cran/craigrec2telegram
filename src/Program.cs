@@ -2,6 +2,7 @@
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Http;
+using Microsoft.CognitiveServices.Speech;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Edge;
 using System.Reactive.Linq;
@@ -37,6 +38,8 @@ static partial class Program
             {
                 Scopes = new[] { DriveService.Scope.Drive }
             }.FromPrivateKey(Environment.GetEnvironmentVariable("GOOGLE_DRIVE_PRIVATE_KEY"))));
+        builder.Services.AddSingleton(SpeechConfig.FromSubscription(Environment.GetEnvironmentVariable("SPEECH_SERVICES_KEY"), Environment.GetEnvironmentVariable("SPEECH_SERVICES_REGION")));
+        builder.Services.AddTransient<IAudioToTextConverter, AudioToTextConverter>();
 
         var app = builder.Build();
 

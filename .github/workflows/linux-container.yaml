@@ -2,22 +2,34 @@ on: [push]
 name: Linux-container
 
 jobs:
-    build-and-deploy:
-        runs-on: ubuntu-latest
-        steps:
-        - name: 'Checkout GitHub Action'
-          uses: actions/checkout@main
-        - uses: kzrnm/get-net-sdk-project-versions-action@v1
-          id: get-version
-          with:
-            proj-path: src/CraigRec2Telegram.csproj
-        - name: Login to GitHub Container Registry
-          uses: docker/login-action@v2
-          with:
-            registry: ghcr.io
-            username: ${{ github.actor }}
-            password: ${{ secrets.GHCR_TOKEN }}
-        - run: |
-            dotnet publish -c Release ./src/CraigRec2Telegram.csproj
-            docker tag craigrec2telegram:${{ steps.get-version.outputs.version }} ghcr.io/${{ github.actor }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
-            docker push ghcr.io/${{ github.actor }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 'Checkout GitHub Action'
+      uses: actions/checkout@main
+    - uses: kzrnm/get-net-sdk-project-versions-action@v1
+      id: get-version
+      with:
+        proj-path: src/CraigRec2Telegram.csproj
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GHCR_TOKEN }}
+    - name: Build Docker image with dotnet
+      run: |
+        IMAGE_NAME=ghcr.io/${{ github.actor }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
+        dotnet publish -c Release ./src/CraigRec2Telegram.csproj
+        docker tag craigrec2telegram:${{ steps.get-version.outputs.version }} $IMAGE_NAME
+        docker push $IMAGE_NAME
+    - name: Login to Azure
+      uses: Azure/login@v1
+      with:
+        creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
+    - name: Update Azure ContainerApp
+      run: |
+        dotnet tool install -g namespace2xml
+        APP_NAME=craigrec2telegram-1
+        namespace2xml -i az.yaml -s az-schema.yaml -v app_name=$APP_NAME user_name=${{ github.actor }} image_name=craigrec2telegram:${{ steps.get-version.outputs.version }} tenantId=${{ secrets.TENANT_ID }} subscription_id=${{ secrets.SUBSCRIPTION_ID }} resource_group=${{ secrets.RESOURCE_GROUP }} google_drive_email=${{ secrets.GOOGLE_DRIVE_EMAIL }}
+        az containerapp update --name $APP_NAME --resource-group ${{ secrets.RESOURCE_GROUP }} --yaml containerapp.yaml -o table

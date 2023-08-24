@@ -1,0 +1,50 @@
+app_name: null
+subscription_id: null
+resource_group: null
+image_name: null
+google_drive_email: null
+user_name: null
+
+containerapp:
+  id: /subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.App/containerapps/${app_name}
+  type: Microsoft.App/containerApps
+  location: West US
+  name: ${app_name}
+  properties:
+    configuration:
+      activeRevisionsMode: Single
+      registries:
+      - identity: ''
+        passwordSecretRef: reg-pswd-507accd7-8c8c
+        server: ghcr.io
+        username: ${user_name}
+      secrets:
+      - name: telegram-bot-api-token
+      - name: google-drive-private-key
+      - name: reg-pswd-507accd7-8c8c
+      - name: speech-services-key
+    environmentId: /subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.App/managedEnvironments/${app_name}
+    template:
+      containers:
+      - env:
+        - name: GOOGLE_DRIVE_EMAIL
+          value: ${google_drive_email}
+        - name: TELEGRAM_BOT_API_TOKEN
+          secretRef: telegram-bot-api-token
+        - name: GOOGLE_DRIVE_PRIVATE_KEY
+          secretRef: google-drive-private-key
+        - name: SPEECH_SERVICES_REGION
+          value: Eastus
+        - name: SPEECH_SERVICES_KEY
+          secretRef: speech-services-key
+        image: ghcr.io/${user_name}/${image_name}
+        name: ${app_name}
+        probes: []
+        resources:
+          cpu: 2
+          ephemeralStorage: 8Gi
+          memory: 4Gi
+      scale:
+        maxReplicas: 1
+        minReplicas: 1
+  resourceGroup: ${resource_group}

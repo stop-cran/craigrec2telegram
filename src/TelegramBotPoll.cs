@@ -1,6 +1,4 @@
-﻿using Google.Apis.Auth.OAuth2;
-using Google.Apis.Drive.v3;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
+﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using Telegram.Bot;
@@ -19,6 +17,7 @@ namespace CraigRec2Telegram
         private readonly IHostApplicationLifetime hostApplicationLifetime;
         private readonly ICraigDownloader craigDownloader;
         private readonly IGoogleDriveRepository googleDriveRepository;
+        private readonly IAudioToTextConverter audioToTextConverter;
         private Task recieveTask = Task.CompletedTask;
         private bool currentlyProcessingUpdate;
 
@@ -26,6 +25,7 @@ namespace CraigRec2Telegram
             IHostApplicationLifetime hostApplicationLifetime,
             ICraigDownloader craigDownloader,
             IGoogleDriveRepository googleDriveRepository,
+            IAudioToTextConverter audioToTextConverter,
             ILogger<TelegramBotPoll> logger)
         {
             this.telegramBotClient = telegramBotClient;
@@ -33,6 +33,7 @@ namespace CraigRec2Telegram
             this.hostApplicationLifetime = hostApplicationLifetime;
             this.craigDownloader = craigDownloader;
             this.googleDriveRepository = googleDriveRepository;
+            this.audioToTextConverter = audioToTextConverter;
         }
 
         public Task StartAsync(CancellationToken cancellationToken)
@@ -70,7 +71,7 @@ namespace CraigRec2Telegram
             if (Links.DriveLinkRegex().IsMatch(update.Message.Text))
             {
                 await client.PinChatMessageAsync(chat.Id, update.Message.MessageId, cancellationToken: cancel);
-                await client.SendTextMessageAsync(chat.Id, "Теперь присылай ссылку на запись в формате https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
+                await client.SendTextMessageAsync(chat.Id, "Теперь присылай ссылку на запись в формате [Желаемое название записи] https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
                 return;
             }
 
@@ -92,7 +93,6 @@ namespace CraigRec2Telegram
                 return;
             }
 
-
             if (update.Type == UpdateType.Message && update.Message?.Type == MessageType.Text && update.Message.Text != null)
             {
                 var text = update.Message.Text;
@@ -101,12 +101,17 @@ namespace CraigRec2Telegram
 
                 if (craigLinkMatch.Success)
                 {
-                    await ProcessRecord(client, chat.Id, craigLinkMatch.Groups["prefix"].Success, craigLinkMatch.Groups["id"].Value, craigLinkMatch.Groups["key"].Value, driveFolderId, cancel);
+                    await ProcessRecord(client, chat.Id,
+                        craigLinkMatch.Groups["prefix"].Success,
+                        craigLinkMatch.Groups["id"].Value,
+                        craigLinkMatch.Groups["key"].Value,
+                        craigLinkMatch.Groups["name"].Value,
+                        driveFolderId, cancel);
                     return;
                 }
             }
 
-            await client.SendTextMessageAsync(chat.Id, "Присылай ссылку на запись в формате https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
+            await client.SendTextMessageAsync(chat.Id, "Присылай ссылку на запись в формате [Желаемое название записи] https://[giarc.]craig.horse/rec/<id>?key=<key>", cancellationToken: cancel);
         }
 
         private async Task SetStatusMessageText(ChatId chatId, ITelegramBotClient client, Message statusMessage, string statusText, CancellationToken cancellationToken)
@@ -114,18 +119,26 @@ namespace CraigRec2Telegram
             if (statusMessage.Text != statusText)
                 try
                 {
-                    await client.EditMessageTextAsync(chatId, statusMessage.MessageId, statusText, cancellationToken: cancellationToken);
-
                     logger.LogDebug($"Status: {Links.SnipUserName().Replace(statusText, "***").Replace("\n", "\t")}");
+                    await client.EditMessageTextAsync(chatId, statusMessage.MessageId, statusText, cancellationToken: cancellationToken);
                 }
                 catch (ApiRequestException ex) when (ex.Message.ToLowerInvariant().Contains("message is not modified"))
                 { }
         }
 
-        private async Task ProcessRecord(ITelegramBotClient client, long chatId, bool giarc, string recordId, string recordKey, string driveFolderId, CancellationToken cancel)
+        private async Task ProcessRecord(ITelegramBotClient client, long chatId, bool giarc, string recordId, string recordKey, string recordName, string driveFolderId, CancellationToken cancel)
         {
             using var scope = logger.BeginScope(new { recordId });
             string downloadFolder = $"/tmp/record-{recordId}-{Guid.NewGuid()}";
+
+            if (recordName == null)
+            {
+                recordName = $"{recordId}-{DateTime.Now:yyyy:MM:ddTHH:mm:ss}";
+            }
+            else
+            {
+                recordName = Links.FileNameRegex().Replace(recordName, "_");
+            }
 
             Directory.CreateDirectory(downloadFolder);
 
@@ -140,32 +153,59 @@ namespace CraigRec2Telegram
                     downloadFolder,
                     text => SetStatusMessageText(chatId, client, statusMessage, text, cancel),
                     cancel);
+                var audioFilePath = Path.Combine(downloadFolder, downloadedFileName);
 
                 await SetStatusMessageText(chatId, client, statusMessage, "Загружаю на Google Drive...", cancel);
 
-                var credential = new ServiceAccountCredential(
-                     new ServiceAccountCredential.Initializer(Environment.GetEnvironmentVariable("GOOGLE_DRIVE_EMAIL"))
-                     {
-                         Scopes = new[] { DriveService.Scope.Drive }
-                     }.FromPrivateKey(Environment.GetEnvironmentVariable("GOOGLE_DRIVE_PRIVATE_KEY")));
-
-                var googleDriveFileId = await googleDriveRepository.UploadAsync(
-                    Path.Combine(downloadFolder, downloadedFileName),
+                var googleDriveAudioFileId = await googleDriveRepository.UploadFileAsync(
+                    audioFilePath,
+                    "audio/mpeg",
                     driveFolderId,
-                    $"{recordId}-{DateTime.Now:yyyy:MM:ddTHH:mm:ss}{Path.GetExtension(downloadedFileName)}",
+                    recordName + Path.GetExtension(downloadedFileName),
                     cancel);
 
-                if (googleDriveFileId == null)
+                if (googleDriveAudioFileId == null)
                 {
-                    await client.SendTextMessageAsync(chatId, "Ошибка загрузки!", cancellationToken: cancel);
+                    await client.SendTextMessageAsync(chatId, "Ошибка загрузки аудио!", cancellationToken: cancel);
                     return;
                 }
 
-                logger.LogInformation("Upload succeeded!");
+                await SetStatusMessageText(chatId, client, statusMessage, $"Ссылка на запись: https://drive.google.com/file/d/{googleDriveAudioFileId}/view?usp=drive_link", cancel);
 
-                await SetStatusMessageText(chatId, client, statusMessage, $"Ссылка на запись: https://drive.google.com/file/d/{googleDriveFileId}/view?usp=drive_link", cancel);
+                var textConverterStatusMessage = await client.SendTextMessageAsync(chatId, "Распознаю текст...", cancellationToken: cancel);
 
-                logger.LogInformation($"Successfully processed record {recordId}.");
+                (var text, var subtitles) = await audioToTextConverter.ConvertAsync(audioFilePath,
+                    text => SetStatusMessageText(chatId, client, textConverterStatusMessage, text, cancel).Wait(), cancel);
+
+                var googleDriveTextFileId = await googleDriveRepository.UploadStringAsync(
+                    text,
+                    "text/plain",
+                    driveFolderId,
+                    recordName + ".txt",
+                    cancel);
+
+                if (googleDriveTextFileId == null)
+                {
+                    await client.SendTextMessageAsync(chatId, "Ошибка загрузки текста!", cancellationToken: cancel);
+                    return;
+                }
+
+                var googleDriveSubtitlesFileId = await googleDriveRepository.UploadStringAsync(
+                    subtitles,
+                    "text/plain",
+                    driveFolderId,
+                    recordName + ".srt",
+                    cancel);
+
+                if (googleDriveSubtitlesFileId == null)
+                {
+                    await client.SendTextMessageAsync(chatId, "Ошибка загрузки субтитров!", cancellationToken: cancel);
+                    return;
+                }
+
+                await SetStatusMessageText(chatId, client, textConverterStatusMessage,
+                    $"Ссылка на текст: https://drive.google.com/file/d/{googleDriveTextFileId}/view?usp=drive_link\n" +
+                    $"Ссылка на субтитры: https://drive.google.com/file/d/{googleDriveSubtitlesFileId}/view?usp=drive_link", cancel);
             }
             catch (RecordNotFoundException) { }
             catch (Exception ex)
@@ -192,11 +232,14 @@ namespace CraigRec2Telegram
             [GeneratedRegex("^https://drive\\.google\\.com/drive/folders/(?<id>[a-zA-Z0-9_-]+)(\\?.*)?$")]
             public static partial Regex DriveLinkRegex();
 
-            [GeneratedRegex("https://(?<prefix>giarc\\.)?craig\\.horse/rec/(?<id>[a-zA-Z0-9_]+)\\?key=(?<key>[a-zA-Z0-9_]+)")]
+            [GeneratedRegex("^(?<name>.+)https://(?<prefix>giarc\\.)?craig\\.horse/rec/(?<id>[a-zA-Z0-9_]+)\\?key=(?<key>[a-zA-Z0-9_]+)")]
             public static partial Regex CraigRecordRegex();
 
             [GeneratedRegex("^[0-9]+-(?<name>[^:]+)", RegexOptions.Multiline)]
             public static partial Regex SnipUserName();
+
+            [GeneratedRegex("[^\\w\\d\\s]")]
+            public static partial Regex FileNameRegex();
         }
     }
 
