@@ -2,6 +2,7 @@
 {
     public interface IAudioToTextConverter
     {
-        Task<(string plainText, string subtitles)> ConvertAsync(string mp3FilePath, Action<string> progressCallback, CancellationToken cancellationToken);
+        Task<(byte[] plainText, byte[] subtitles)> ConvertAsync(string m4aFilePath, CancellationToken cancellationToken);
+        IObservable<string> Progress { get; }
     }
 }

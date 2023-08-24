@@ -1,4 +1,7 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
+using System;
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using Telegram.Bot;
@@ -9,7 +12,6 @@ using Telegram.Bot.Types.Enums;
 
 namespace CraigRec2Telegram
 {
-
     public partial class TelegramBotPoll : IHostedService, IHealthCheck
     {
         private readonly ITelegramBotClient telegramBotClient;
@@ -137,7 +139,7 @@ namespace CraigRec2Telegram
             }
             else
             {
-                recordName = Links.FileNameRegex().Replace(recordName, "_").Trim('_', ' ');
+                recordName = Links.FileNameRegex().Replace(recordName, "_").Trim("_- .,;".ToCharArray());
             }
 
             Directory.CreateDirectory(downloadFolder);
@@ -173,11 +175,17 @@ namespace CraigRec2Telegram
                 await SetStatusMessageText(chatId, client, statusMessage, $"Ссылка на запись: https://drive.google.com/file/d/{googleDriveAudioFileId}/view?usp=drive_link", cancel);
 
                 var textConverterStatusMessage = await client.SendTextMessageAsync(chatId, "Распознаю текст...", cancellationToken: cancel);
+                using var progress = audioToTextConverter.Progress
+                    .ObserveOn(TaskPoolScheduler.Default)
+                        .Throttle(TimeSpan.FromSeconds(5))
+                        .SelectMany(async progress =>
+                        {
+                            await SetStatusMessageText(chatId, client, textConverterStatusMessage, progress, cancel);
+                            return Unit.Default;
+                        }).Subscribe();
+                (var text, var subtitles) = await audioToTextConverter.ConvertAsync(audioFilePath, cancel);
 
-                (var text, var subtitles) = await audioToTextConverter.ConvertAsync(audioFilePath,
-                    text => SetStatusMessageText(chatId, client, textConverterStatusMessage, text, cancel).Wait(), cancel);
-
-                var googleDriveTextFileId = await googleDriveRepository.UploadStringAsync(
+                var googleDriveTextFileId = await googleDriveRepository.UploadBytesAsync(
                     text,
                     "text/plain",
                     driveFolderId,
@@ -190,7 +198,7 @@ namespace CraigRec2Telegram
                     return;
                 }
 
-                var googleDriveSubtitlesFileId = await googleDriveRepository.UploadStringAsync(
+                var googleDriveSubtitlesFileId = await googleDriveRepository.UploadBytesAsync(
                     subtitles,
                     "text/plain",
                     driveFolderId,
@@ -208,6 +216,11 @@ namespace CraigRec2Telegram
                     $"Ссылка на субтитры: https://drive.google.com/file/d/{googleDriveSubtitlesFileId}/view?usp=drive_link", cancel);
             }
             catch (RecordNotFoundException) { }
+            catch (ApplicationLogicException ex)
+            {
+                logger.LogError(ex, $"Error processing record {recordId}!");
+                await client.SendTextMessageAsync(chatId, ex.Message, cancellationToken: cancel);
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, $"Error processing record {recordId}!");
@@ -238,10 +251,15 @@ namespace CraigRec2Telegram
             [GeneratedRegex("^[0-9]+-(?<name>[^:]+)", RegexOptions.Multiline)]
             public static partial Regex SnipUserName();
 
-            [GeneratedRegex("[^\\w\\d\\s]")]
+            [GeneratedRegex("[^\\w\\d\\s\\.,;]")]
             public static partial Regex FileNameRegex();
         }
     }
 
     public class RecordNotFoundException : Exception { }
+    public class ApplicationLogicException : Exception
+    {
+        public ApplicationLogicException
+        (string message) : base(message) { }
+    }
 }

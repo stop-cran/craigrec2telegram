@@ -2,7 +2,6 @@
 using Google.Apis.Http;
 using Google.Apis.Services;
 using Google.Apis.Upload;
-using System.Text;
 
 namespace CraigRec2Telegram
 {
@@ -24,9 +23,9 @@ namespace CraigRec2Telegram
             return await UploadAsync(contentStream, contentType, googleDriveFolderId, googleDriveFileName, cancellationToken);
         }
 
-        public async Task<string?> UploadStringAsync(string content, string contentType, string googleDriveFolderId, string googleDriveFileName, CancellationToken cancellationToken)
+        public async Task<string?> UploadBytesAsync(byte[] content, string contentType, string googleDriveFolderId, string googleDriveFileName, CancellationToken cancellationToken)
         {
-            using var contentStream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+            using var contentStream = new MemoryStream(content);
 
             return await UploadAsync(contentStream, contentType, googleDriveFolderId, googleDriveFileName, cancellationToken);
         }

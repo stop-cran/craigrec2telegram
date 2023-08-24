@@ -1,5 +1,9 @@
-on: [push]
 name: Linux-container
+
+on:
+  push:
+    branches:
+    - master
 
 jobs:
   build-and-deploy:
@@ -17,12 +21,20 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GHCR_TOKEN }}
-    - name: Build Docker image with dotnet
+    - name: Build and push Docker image with dotnet
+      id: build
       run: |
-        IMAGE_NAME=ghcr.io/${{ github.actor }}/craigrec2telegram:${{ steps.get-version.outputs.version }}
-        dotnet publish -c Release ./src/CraigRec2Telegram.csproj
-        docker tag craigrec2telegram:${{ steps.get-version.outputs.version }} $IMAGE_NAME
-        docker push $IMAGE_NAME
+        LOCAL_IMAGE_NAME=craigrec2telegram:${{ steps.get-version.outputs.version }}
+        REMOTE_IMAGE_NAME=$LOCAL_IMAGE_NAME.${{ github.run_number }}
+        REMOTE_IMAGE_TAG=ghcr.io/${{ github.actor }}/$REMOTE_IMAGE_NAME
+        docker build base-image -t base-image:${{ github.run_number }}
+        BASE_IMAGE_TAG=ghcr.io/${{ github.actor }}/craigrec2telegram-base:${{ github.run_number }}
+        docker tag base-image:${{ github.run_number }} $BASE_IMAGE_TAG
+        docker push $BASE_IMAGE_TAG
+        dotnet publish -c Release ./src/CraigRec2Telegram.csproj /property:ContainerBaseImage=$BASE_IMAGE_TAG
+        docker tag $LOCAL_IMAGE_NAME $REMOTE_IMAGE_TAG
+        docker push $REMOTE_IMAGE_TAG
+        echo "IMAGE_NAME=${REMOTE_IMAGE_NAME}" >> $GITHUB_OUTPUT
     - name: Login to Azure
       uses: Azure/login@v1
       with:
@@ -31,5 +43,5 @@ jobs:
       run: |
         dotnet tool install -g namespace2xml
         APP_NAME=craigrec2telegram-1
-        namespace2xml -i az.yaml -s az-schema.yaml -v app_name=$APP_NAME user_name=${{ github.actor }} image_name=craigrec2telegram:${{ steps.get-version.outputs.version }} tenantId=${{ secrets.TENANT_ID }} subscription_id=${{ secrets.SUBSCRIPTION_ID }} resource_group=${{ secrets.RESOURCE_GROUP }} google_drive_email=${{ secrets.GOOGLE_DRIVE_EMAIL }}
+        namespace2xml -i az.yaml -s az-schema.yaml -v app_name=$APP_NAME user_name=${{ github.actor }} image_name=${{ steps.build.outputs.IMAGE_NAME }} tenantId=${{ secrets.TENANT_ID }} subscription_id=${{ secrets.SUBSCRIPTION_ID }} resource_group=${{ secrets.RESOURCE_GROUP }} google_drive_email=${{ secrets.GOOGLE_DRIVE_EMAIL }}
         az containerapp update --name $APP_NAME --resource-group ${{ secrets.RESOURCE_GROUP }} --yaml containerapp.yaml -o table

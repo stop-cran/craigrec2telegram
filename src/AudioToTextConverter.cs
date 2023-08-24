@@ -1,5 +1,9 @@
 ﻿using Microsoft.CognitiveServices.Speech;
 using Microsoft.CognitiveServices.Speech.Audio;
+using System;
+using System.Diagnostics;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text;
 
 namespace CraigRec2Telegram
@@ -15,54 +19,100 @@ namespace CraigRec2Telegram
             this.logger = logger;
         }
 
-        public async Task<(string plainText, string subtitles)> ConvertAsync(string mp3FilePath, Action<string> progressCallback, CancellationToken cancellationToken)
+        private event Action<string> OnProgress = _ => { };
+
+        public IObservable<string> Progress =>
+            Observable.FromEvent<string>(
+                handler => OnProgress += handler,
+                handler => OnProgress -= handler);
+
+        public async Task<(byte[] plainText, byte[] subtitles)> ConvertAsync(string m4aFilePath, CancellationToken cancellationToken)
         {
-            var plainText = new StringBuilder();
+            var lastProgress = DateTime.Now;
+            var mp3FilePath = Path.Join(Path.GetDirectoryName(m4aFilePath), Path.GetFileNameWithoutExtension(m4aFilePath)) + ".mp3";
+
+            OnProgress($"Конвертирую в mp3...");
+
+            using (var ffmpegProcess = Process.Start("ffmpeg", $"-i \"{m4aFilePath}\" \"{mp3FilePath}\""))
+            {
+                await ffmpegProcess.WaitForExitAsync(cancellationToken);
+
+                if (ffmpegProcess.ExitCode != 0)
+                {
+                    logger.LogError(await ffmpegProcess.StandardError.ReadToEndAsync());
+                    throw new ApplicationLogicException("Ошибка конвертации!");
+                }
+            }
+
+            using var plainText = new MemoryStream();
+            using var plainTextWriter = new StreamWriter(plainText);
             int subsCount = 1;
-            var subtitles = new StringBuilder();
-            var result = new TaskCompletionSource<(string plainText, string subtitles)>();
+            using var subtitles = new MemoryStream();
+            using var subtitlesWriter = new StreamWriter(subtitles);
+            var result = new TaskCompletionSource<(byte[] plainText, byte[] subtitles)>();
             using var pushStream = AudioInputStream.CreatePushStream(AudioStreamFormat.GetCompressedFormat(AudioStreamContainerFormat.MP3));
 
             pushStream.Write(await File.ReadAllBytesAsync(mp3FilePath, cancellationToken));
+            pushStream.Close();
 
             using var audioConfig = AudioConfig.FromStreamInput(pushStream);
             using var recognizer = new SpeechRecognizer(speechConfig, "ru-ru", audioConfig);
 
             recognizer.Recognized += (_, eventArgs) =>
             {
-                var start = TimeSpan.FromSeconds(1e-7 * eventArgs.Result.OffsetInTicks);
-                var end = start + eventArgs.Result.Duration;
-
-                if (eventArgs.Result.Reason == ResultReason.RecognizedSpeech)
+                try
                 {
-                    plainText.Append(eventArgs.Result.Text);
-                    subtitles.AppendLine(subsCount.ToString());
-                    subsCount++;
-                    subtitles.AppendLine($"{start:HH:mm:ss,fff} --> {end:HH:mm:ss,fff}");
-                    subtitles.AppendLine(eventArgs.Result.Text);
-                    subtitles.AppendLine();
-                }
+                    var start = TimeSpan.FromTicks(eventArgs.Result.OffsetInTicks);
+                    var end = start + eventArgs.Result.Duration;
 
-                progressCallback($"Распознавание {end:HH:mm}...");
+                    if (eventArgs.Result.Reason == ResultReason.RecognizedSpeech)
+                    {
+                        plainTextWriter.Write(eventArgs.Result.Text + " ");
+                        subtitlesWriter.WriteLine(subsCount.ToString());
+                        subsCount++;
+                        subtitlesWriter.WriteLine($"{start:hh\\:mm\\:ss\\.fff} --> {end:hh\\:mm\\:ss\\.fff}");
+                        subtitlesWriter.WriteLine(eventArgs.Result.Text);
+                        subtitlesWriter.WriteLine();
+                    }
+
+                    OnProgress($"Распознавание {end:hh\\:mm\\:ss}...");
+                }
+                catch (Exception ex)
+                {
+                    OnProgress("Ошибка распознавания!");
+                    logger.LogError("OnRecognized error", ex);
+                    result.TrySetException(ex);
+                }
             };
 
             recognizer.Canceled += (_, eventArgs) =>
             {
-                if (eventArgs.Reason == CancellationReason.Error)
+                try
                 {
-                    logger.LogError(eventArgs.ErrorDetails);
-                    progressCallback("Ошибка распознавания!");
-                }
-                else if (eventArgs.Reason == CancellationReason.EndOfStream)
-                {
-                    progressCallback("Распознавание завершено.");
-                }
+                    if (eventArgs.Reason == CancellationReason.Error)
+                    {
+                        logger.LogError(eventArgs.ErrorDetails);
+                        OnProgress("Ошибка распознавания(2)!");
+                    }
+                    else if (eventArgs.Reason == CancellationReason.EndOfStream)
+                    {
+                        OnProgress("Распознавание завершено.");
+                    }
 
-                result.TrySetResult((plainText.ToString(), subtitles.ToString()));
+                    plainTextWriter.Flush();
+                    subtitlesWriter.Flush();
+                    result.TrySetResult((plainText.ToArray(), subtitles.ToArray()));
+                }
+                catch (Exception ex)
+                {
+                    OnProgress("Ошибка распознавания (3)!");
+                    logger.LogError("Canceled error", ex);
+                    result.TrySetException(ex);
+                }
             };
 
-            recognizer.SessionStarted += (_, _) => progressCallback($"Начинаю распознавание...");
-            recognizer.SessionStopped += (_, _) => result.TrySetResult((plainText.ToString(), subtitles.ToString()));
+            recognizer.SessionStarted += (_, _) => OnProgress("Начинаю распознавание...");
+            recognizer.SessionStopped += (_, _) => OnProgress("Конец распознавания.");
 
             await recognizer.StartContinuousRecognitionAsync();
 

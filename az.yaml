@@ -5,6 +5,15 @@ image_name: null
 google_drive_email: null
 user_name: null
 
+containerapp_env:
+  name: ${app_name}
+  type: Microsoft.App/managedEnvironments
+  location: West US
+  resourceGroup: ${resource_group}
+  properties:
+    appLogsConfiguration:
+      destination: log-analytics
+    zoneRedundant: false
 containerapp:
   id: /subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.App/containerapps/${app_name}
   type: Microsoft.App/containerApps

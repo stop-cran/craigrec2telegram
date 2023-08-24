@@ -1,2 +1,4 @@
 containerapp:
   output: yaml
+containerapp_env:
+  output: yaml

@@ -100,7 +100,7 @@ namespace CraigRec2Telegram
                 }
 
                 if (!finished)
-                    await Task.Delay(5000, cancel);
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancel);
             }
 
             return await downloadedFileName;
