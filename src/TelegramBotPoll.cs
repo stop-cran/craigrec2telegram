@@ -137,7 +137,7 @@ namespace CraigRec2Telegram
             }
             else
             {
-                recordName = Links.FileNameRegex().Replace(recordName, "_");
+                recordName = Links.FileNameRegex().Replace(recordName, "_").Trim('_', ' ');
             }
 
             Directory.CreateDirectory(downloadFolder);
