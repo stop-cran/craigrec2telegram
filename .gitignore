@@ -265,4 +265,4 @@ __pycache__/
 /tools
 /tests/coverage.*.xml
 
-containerapp.yaml
+template.yaml

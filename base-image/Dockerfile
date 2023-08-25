@@ -1,4 +1,4 @@
-FROM ghcr.io/stop-cran/selenium/standalone-edge:114.0
+FROM selenium/standalone-edge:114.0-edgedriver-114.0
 USER 0
 RUN apt update && \
     apt install -y --no-install-recommends ffmpeg \

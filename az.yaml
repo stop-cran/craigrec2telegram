@@ -1,59 +1,71 @@
-app_name: null
-subscription_id: null
-resource_group: null
-image_name: null
-google_drive_email: null
-user_name: null
-
-containerapp_env:
-  name: ${app_name}
-  type: Microsoft.App/managedEnvironments
-  location: West US
-  resourceGroup: ${resource_group}
-  properties:
-    appLogsConfiguration:
-      destination: log-analytics
-    zoneRedundant: false
-containerapp:
-  id: /subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.App/containerapps/${app_name}
-  type: Microsoft.App/containerApps
-  location: West US
-  name: ${app_name}
-  properties:
-    configuration:
-      activeRevisionsMode: Single
-      registries:
-      - identity: ''
-        passwordSecretRef: reg-pswd-507accd7-8c8c
-        server: ghcr.io
-        username: ${user_name}
-      secrets:
-      - name: telegram-bot-api-token
-      - name: google-drive-private-key
-      - name: reg-pswd-507accd7-8c8c
-      - name: speech-services-key
-    environmentId: /subscriptions/${subscription_id}/resourceGroups/${resource_group}/providers/Microsoft.App/managedEnvironments/${app_name}
-    template:
-      containers:
-      - env:
-        - name: GOOGLE_DRIVE_EMAIL
-          value: ${google_drive_email}
-        - name: TELEGRAM_BOT_API_TOKEN
-          secretRef: telegram-bot-api-token
-        - name: GOOGLE_DRIVE_PRIVATE_KEY
-          secretRef: google-drive-private-key
-        - name: SPEECH_SERVICES_REGION
-          value: Eastus
-        - name: SPEECH_SERVICES_KEY
-          secretRef: speech-services-key
-        image: ghcr.io/${user_name}/${image_name}
-        name: ${app_name}
-        probes: []
-        resources:
-          cpu: 2
-          ephemeralStorage: 8Gi
-          memory: 4Gi
-      scale:
-        maxReplicas: 1
-        minReplicas: 1
-  resourceGroup: ${resource_group}
+template:
+  $schema: https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#
+  contentVersion: 1.0.0.0
+  resources:
+  - apiVersion: '2023-05-01'
+    name: ${app_name}
+    type: Microsoft.App/managedEnvironments
+    location: ${location}
+    properties:
+      customDomainConfiguration: {}
+      daprConfiguration: {}
+      kedaConfiguration: {}
+      peerAuthentication:
+        mtls:
+          enabled: false
+      zoneRedundant: false
+  - apiVersion: '2023-05-01'
+    name: ${speech_service_name}
+    type: Microsoft.CognitiveServices/accounts
+    kind: SpeechServices
+    location: ${location}
+    sku:
+      name: F0
+    properties:
+      networkAcls:
+        defaultAction: Allow
+      publicNetworkAccess: Enabled
+  - apiVersion: '2023-05-01'
+    name: ${app_name}
+    type: Microsoft.App/containerapps
+    location: ${location}
+    dependsOn:
+    - '[resourceId(''Microsoft.App/managedEnvironments'', ''${app_name}'')]'
+    properties:
+      configuration:
+        activeRevisionsMode: Single
+        registries:
+        - passwordSecretRef: reg-pswd-507accd7-8c8c
+          server: ghcr.io
+          username: ${user_name}
+        secrets:
+        - name: telegram-bot-api-token
+          value: ${telegram_bot_api_token}
+        - name: google-drive-private-key
+          value: ${google_drive_private_key}
+        - name: reg-pswd-507accd7-8c8c
+          value: ${ghcr_token}
+        - name: speech-services-key
+          value: ${speech_services_key}
+      environmentId: '[resourceId(''Microsoft.App/managedEnvironments'', ''${app_name}'')]'
+      template:
+        containers:
+        - name: ${app_name}
+          image: ghcr.io/${user_name}/${image_name}
+          resources:
+            cpu: 2.0
+            memory: 4Gi
+          env:
+          - name: GOOGLE_DRIVE_EMAIL
+            value: ${google_drive_email}
+          - name: TELEGRAM_BOT_API_TOKEN
+            secretRef: telegram-bot-api-token
+          - name: GOOGLE_DRIVE_PRIVATE_KEY
+            secretRef: google-drive-private-key
+          - name: SPEECH_SERVICES_REGION
+            value: ${location}
+          - name: SPEECH_SERVICES_KEY
+            secretRef: speech-services-key
+        scale:
+          maxReplicas: 1
+          minReplicas: 1

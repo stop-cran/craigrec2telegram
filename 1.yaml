@@ -1,0 +1,97 @@
+$schema: https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#
+contentVersion: 1.0.0.0
+parameters:
+  accounts_craig2telegram_name:
+    type: String
+  containerapps_craigrec2telegram_1_name:
+    type: String
+  managedEnvironments_craigrec2telegram_1_name:
+    type: String
+resources:
+- apiVersion: '2023-05-01'
+  location: West US
+  name: '[parameters(''managedEnvironments_craigrec2telegram_1_name'')]'
+  properties:
+    appLogsConfiguration:
+      destination: log-analytics
+      logAnalyticsConfiguration:
+        customerId: b87d8466-2608-4ab6-a2a0-ed767826e20c
+    customDomainConfiguration: {}
+    daprConfiguration: {}
+    kedaConfiguration: {}
+    peerAuthentication:
+      mtls:
+        enabled: false
+    zoneRedundant: false
+  type: Microsoft.App/managedEnvironments
+- apiVersion: '2023-05-01'
+  identity:
+    type: None
+  kind: SpeechServices
+  location: westus
+  name: '[parameters(''accounts_craig2telegram_name'')]'
+  properties:
+    networkAcls:
+      defaultAction: Allow
+      ipRules: []
+      virtualNetworkRules: []
+    publicNetworkAccess: Enabled
+  sku:
+    name: F0
+  type: Microsoft.CognitiveServices/accounts
+- apiVersion: '2023-05-01'
+  dependsOn:
+  - '[resourceId(''Microsoft.App/managedEnvironments'', parameters(''managedEnvironments_craigrec2telegram_1_name''))]'
+  identity:
+    type: None
+  location: West US
+  name: '[parameters(''containerapps_craigrec2telegram_1_name'')]'
+  properties:
+    configuration:
+      activeRevisionsMode: Single
+      registries:
+      - passwordSecretRef: reg-pswd-507accd7-8c8c
+        server: ghcr.io
+        username: stop-cran
+      secrets:
+      - name: google-drive-private-key
+      - name: reg-pswd-507accd7-8c8c
+      - name: speech-services-key
+      - name: telegram-bot-api-token
+    environmentId: '[resourceId(''Microsoft.App/managedEnvironments'', parameters(''managedEnvironments_craigrec2telegram_1_name''))]'
+    managedEnvironmentId: '[resourceId(''Microsoft.App/managedEnvironments'', parameters(''managedEnvironments_craigrec2telegram_1_name''))]'
+    template:
+      containers:
+      - env:
+        - name: GOOGLE_DRIVE_EMAIL
+          value: craigrec2telegram@k8s-course-300712.iam.gserviceaccount.com
+        - name: TELEGRAM_BOT_API_TOKEN
+          secretRef: telegram-bot-api-token
+        - name: GOOGLE_DRIVE_PRIVATE_KEY
+          secretRef: google-drive-private-key
+        - name: SPEECH_SERVICES_REGION
+          value: westus
+        - name: SPEECH_SERVICES_KEY
+          secretRef: speech-services-key
+        image: ghcr.io/stop-cran/craigrec2telegram:0.4.51
+        name: '[parameters(''containerapps_craigrec2telegram_1_name'')]'
+        probes: []
+        resources:
+          cpu: 2
+          memory: 4Gi
+      scale:
+        maxReplicas: 1
+        minReplicas: 1
+      volumes: []
+  type: Microsoft.App/containerapps
+- apiVersion: '2023-05-01'
+  dependsOn:
+  - '[resourceId(''Microsoft.App/managedEnvironments'', parameters(''managedEnvironments_craigrec2telegram_1_name''))]'
+  name: '[concat(parameters(''managedEnvironments_craigrec2telegram_1_name''), ''/craig'')]'
+  properties:
+    azureFile:
+      accessMode: ReadWrite
+      accountName: craig2telegram
+      shareName: data
+  type: Microsoft.App/managedEnvironments/storages
+variables: {}

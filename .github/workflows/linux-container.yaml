@@ -1,18 +1,18 @@
-name: Linux-container
-
+name: Publish
 on:
   push:
     branches:
-    - master
+      - master
 
 jobs:
-  build-and-deploy:
+  publish:
     runs-on: ubuntu-latest
     steps:
-    - name: 'Checkout GitHub Action'
+    - name: Checkout
       uses: actions/checkout@main
-    - uses: kzrnm/get-net-sdk-project-versions-action@v1
+    - name: Get project version
       id: get-version
+      uses: kzrnm/get-net-sdk-project-versions-action@v1
       with:
         proj-path: src/CraigRec2Telegram.csproj
     - name: Login to GitHub Container Registry
@@ -21,27 +21,38 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GHCR_TOKEN }}
-    - name: Build and push Docker image with dotnet
-      id: build
-      run: |
-        LOCAL_IMAGE_NAME=craigrec2telegram:${{ steps.get-version.outputs.version }}
-        REMOTE_IMAGE_NAME=$LOCAL_IMAGE_NAME.${{ github.run_number }}
-        REMOTE_IMAGE_TAG=ghcr.io/${{ github.actor }}/$REMOTE_IMAGE_NAME
-        docker build base-image -t base-image:${{ github.run_number }}
-        BASE_IMAGE_TAG=ghcr.io/${{ github.actor }}/craigrec2telegram-base:${{ github.run_number }}
-        docker tag base-image:${{ github.run_number }} $BASE_IMAGE_TAG
-        docker push $BASE_IMAGE_TAG
-        dotnet publish -c Release ./src/CraigRec2Telegram.csproj /property:ContainerBaseImage=$BASE_IMAGE_TAG
-        docker tag $LOCAL_IMAGE_NAME $REMOTE_IMAGE_TAG
-        docker push $REMOTE_IMAGE_TAG
-        echo "IMAGE_NAME=${REMOTE_IMAGE_NAME}" >> $GITHUB_OUTPUT
     - name: Login to Azure
       uses: Azure/login@v1
       with:
         creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
-    - name: Update Azure ContainerApp
+    - name: Build and push Docker image with dotnet
+      id: publish
       run: |
-        dotnet tool install -g namespace2xml
-        APP_NAME=craigrec2telegram-1
-        namespace2xml -i az.yaml -s az-schema.yaml -v app_name=$APP_NAME user_name=${{ github.actor }} image_name=${{ steps.build.outputs.IMAGE_NAME }} tenantId=${{ secrets.TENANT_ID }} subscription_id=${{ secrets.SUBSCRIPTION_ID }} resource_group=${{ secrets.RESOURCE_GROUP }} google_drive_email=${{ secrets.GOOGLE_DRIVE_EMAIL }}
-        az containerapp update --name $APP_NAME --resource-group ${{ secrets.RESOURCE_GROUP }} --yaml containerapp.yaml -o table
+        BASE_IMAGE_TAG=ghcr.io/${{ github.actor }}/craigrec2telegram-base:${{ github.run_number }}
+        docker build base-image -t base-image:${{ github.run_number }}
+        docker tag base-image:${{ github.run_number }} $BASE_IMAGE_TAG
+        docker push $BASE_IMAGE_TAG
+        LOCAL_IMAGE_NAME=craigrec2telegram:${{ steps.get-version.outputs.version }}
+        REMOTE_IMAGE_NAME=$LOCAL_IMAGE_NAME.${{ github.run_number }}
+        REMOTE_IMAGE_TAG=ghcr.io/${{ github.actor }}/$REMOTE_IMAGE_NAME
+        dotnet publish -c Release ./src/CraigRec2Telegram.csproj /property:ContainerBaseImage=$BASE_IMAGE_TAG
+        docker tag $LOCAL_IMAGE_NAME $REMOTE_IMAGE_TAG
+        docker push $REMOTE_IMAGE_TAG
+        echo "IMAGE_NAME=${REMOTE_IMAGE_NAME}" >> $GITHUB_OUTPUT
+    - name: Install tools
+      run: dotnet tool install -g namespace2xml
+    - name: Generate ARM template
+      run: >
+        namespace2xml -i az.yaml -s az-schema.yaml \
+                      -v app_name=craigrec2telegram-1 \
+                         speech_service_name=craig2telegram \
+                         location=westus \
+                         user_name=${{ github.actor }} \
+                        "image_name=${{ steps.publish.outputs.IMAGE_NAME }}" \
+                        "ghcr_token=${{ secrets.GHCR_TOKEN }}" \
+                        "telegram_bot_api_token=${{ secrets.TELEGRAM_BOT_API_TOKEN }}" \
+                         google_drive_email=${{ secrets.GOOGLE_DRIVE_EMAIL }} \
+                        "google_drive_private_key=${{ secrets.GOOGLE_DRIVE_PRIVATE_KEY }}" \
+                        "speech_services_key=$(az cognitiveservices account keys list --name craig2telegram --resource-group ${{ secrets.RESOURCE_GROUP }} | jq -r .key1)"
+    - name: Deploy ARM template
+      run: az deployment group create --resource-group ${{ secrets.RESOURCE_GROUP }} --template-file template.json

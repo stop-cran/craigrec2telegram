@@ -1,4 +1,2 @@
-containerapp:
-  output: yaml
-containerapp_env:
-  output: yaml
+template:
+  output: json

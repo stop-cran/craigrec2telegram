@@ -1,0 +1,117 @@
+{
+  "resources": [
+    {
+      "properties": {
+        "customDomainConfiguration": {},
+        "daprConfiguration": {},
+        "kedaConfiguration": {},
+        "peerAuthentication": {
+          "mtls": {
+            "enabled": false
+          }
+        },
+        "zoneRedundant": false
+      },
+      "apiVersion": "2023-05-01",
+      "name": "craigrec2telegram-1",
+      "type": "Microsoft.App/managedEnvironments",
+      "location": "westus"
+    },
+    {
+      "apiVersion": "2023-05-01",
+      "name": "craig2telegram",
+      "type": "Microsoft.CognitiveServices/accounts",
+      "kind": "SpeechServices",
+      "location": "westus",
+      "sku": {
+        "name": "F0"
+      },
+      "properties": {
+        "networkAcls": {
+          "defaultAction": "Allow"
+        },
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "apiVersion": "2023-05-01",
+      "name": "craigrec2telegram-1",
+      "type": "Microsoft.App/containerapps",
+      "location": "westus",
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', 'craigrec2telegram-1')]"
+      ],
+      "properties": {
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "registries": [
+            {
+              "passwordSecretRef": "reg-pswd-507accd7-8c8c",
+              "server": "ghcr.io",
+              "username": "stop-cran"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "telegram-bot-api-token",
+              "value": "sawer"
+            },
+            {
+              "name": "google-drive-private-key",
+              "value": "sesert"
+            },
+            {
+              "name": "reg-pswd-507accd7-8c8c",
+              "value": "srthsrt"
+            },
+            {
+              "name": "speech-services-key",
+              "value": "0ae108f994374ed8a5dea62eb7de0901"
+            }
+          ]
+        },
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', 'craigrec2telegram-1')]",
+        "template": {
+          "containers": [
+            {
+              "name": "craigrec2telegram-1",
+              "image": "ghcr.io/stop-cran/seghgsr",
+              "resources": {
+                "cpu": 2.0,
+                "memory": "4Gi"
+              },
+              "env": [
+                {
+                  "name": "GOOGLE_DRIVE_EMAIL",
+                  "value": "serthsrth"
+                },
+                {
+                  "name": "TELEGRAM_BOT_API_TOKEN",
+                  "secretRef": "telegram-bot-api-token"
+                },
+                {
+                  "name": "GOOGLE_DRIVE_PRIVATE_KEY",
+                  "secretRef": "google-drive-private-key"
+                },
+                {
+                  "name": "SPEECH_SERVICES_REGION",
+                  "value": "westus"
+                },
+                {
+                  "name": "SPEECH_SERVICES_KEY",
+                  "secretRef": "speech-services-key"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "maxReplicas": 1,
+            "minReplicas": 1
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0"
+}
