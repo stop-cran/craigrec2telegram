@@ -61,7 +61,7 @@ namespace CraigRec2Telegram
             else
             {
                 await setStatusText("Запись не найдена!");
-                throw new RecordNotFoundException();
+                throw new ApplicationLogicException();
             }
 
             await setStatusText("Жду обработки (2)...");
@@ -103,7 +103,7 @@ namespace CraigRec2Telegram
                     await Task.Delay(TimeSpan.FromSeconds(5), cancel);
             }
 
-            return await downloadedFileName;
+            return Path.Combine(downloadFolder, await downloadedFileName);
         }
     }
 }

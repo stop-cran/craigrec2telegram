@@ -35,7 +35,7 @@ jobs:
         LOCAL_IMAGE_NAME=craigrec2telegram:${{ steps.get-version.outputs.version }}
         REMOTE_IMAGE_NAME=$LOCAL_IMAGE_NAME.${{ github.run_number }}
         REMOTE_IMAGE_TAG=ghcr.io/${{ github.actor }}/$REMOTE_IMAGE_NAME
-        dotnet publish -c Release ./src/CraigRec2Telegram.csproj /property:ContainerBaseImage=$BASE_IMAGE_TAG
+        dotnet publish -c Release ./src/CraigRec2Telegram.csproj /p:ContainerBaseImage=$BASE_IMAGE_TAG /p:RuntimeIdentifier=linux-x64
         docker tag $LOCAL_IMAGE_NAME $REMOTE_IMAGE_TAG
         docker push $REMOTE_IMAGE_TAG
         echo "IMAGE_NAME=${REMOTE_IMAGE_NAME}" >> $GITHUB_OUTPUT

@@ -1,10 +1,6 @@
 ﻿using Microsoft.CognitiveServices.Speech;
 using Microsoft.CognitiveServices.Speech.Audio;
-using System;
-using System.Diagnostics;
-using System.Reactive;
 using System.Reactive.Linq;
-using System.Text;
 
 namespace CraigRec2Telegram
 {
@@ -26,24 +22,8 @@ namespace CraigRec2Telegram
                 handler => OnProgress += handler,
                 handler => OnProgress -= handler);
 
-        public async Task<(byte[] plainText, byte[] subtitles)> ConvertAsync(string m4aFilePath, CancellationToken cancellationToken)
+        public async Task<(byte[] plainText, byte[] subtitles)> ConvertAsync(string mp3FilePath, CancellationToken cancellationToken)
         {
-            var lastProgress = DateTime.Now;
-            var mp3FilePath = Path.Join(Path.GetDirectoryName(m4aFilePath), Path.GetFileNameWithoutExtension(m4aFilePath)) + ".mp3";
-
-            OnProgress($"Конвертирую в mp3...");
-
-            using (var ffmpegProcess = Process.Start("ffmpeg", $"-i \"{m4aFilePath}\" \"{mp3FilePath}\""))
-            {
-                await ffmpegProcess.WaitForExitAsync(cancellationToken);
-
-                if (ffmpegProcess.ExitCode != 0)
-                {
-                    logger.LogError(await ffmpegProcess.StandardError.ReadToEndAsync());
-                    throw new ApplicationLogicException("Ошибка конвертации!");
-                }
-            }
-
             using var plainText = new MemoryStream();
             using var plainTextWriter = new StreamWriter(plainText);
             int subsCount = 1;

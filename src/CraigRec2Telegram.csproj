@@ -4,7 +4,6 @@
     <TargetFramework>net7.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <PublishProfile>DefaultContainer</PublishProfile>
     <ContainerBaseImage>ghcr.io/stop-cran/selenium/standalone-edge:114.0</ContainerBaseImage>
     <BaseImageTag>latest</BaseImageTag>
